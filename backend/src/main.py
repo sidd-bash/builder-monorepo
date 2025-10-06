@@ -3,9 +3,20 @@ from fastapi.openapi.models import APIKey, APIKeyIn, SecuritySchemeType
 from fastapi.openapi.utils import get_openapi
 from src.routes import auth_routes
 from src.middlewares.auth_middleware import AuthMiddleware
+from fastapi.middleware.cors import CORSMiddleware
+
 
 
 app = FastAPI()
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or ["http://localhost:5173"] for stricter security
+    allow_credentials=True,
+    allow_methods=["*"],  # important: allows OPTIONS, POST, GET, etc.
+    allow_headers=["*"],
+)
 
 # ✅ Add the authentication middleware
 app.add_middleware(AuthMiddleware)

@@ -8,6 +8,8 @@ import src.models.user_model as user_models
 from src.utils.auth_utils import hash_password, verify_password, create_access_token, verify_token
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials  # CHANGED: Use HTTPBearer
 from fastapi import Depends
+import logging
+logger = logging.getLogger(__name__)
 
 # CHANGED: Use HTTPBearer for direct token input in Swagger
 security = HTTPBearer() 
@@ -16,35 +18,67 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Signup logic (unchanged)
 async def signup(user: user_models.UserCreate):
-    # Check if user exists
-    existing_user = await db.users.find_one({
-        "$or": [
-            {"email": user.email},
-            {"username": user.username}
-        ]
-    })
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email or username already exists")
-    
-    # Hash password safely (SHA256 + bcrypt)
-    hashed_password = hash_password(user.password)
+    logger.info("Signup attempt made")
 
-    # Prepare user document
-    user_dict = user.dict()
-    user_dict["hashed_password"] = hashed_password
-    del user_dict["password"]
+    try:
+        # Check if user already exists by email or username
+        existing_user = await db.users.find_one({
+            "$or": [
+                {"email": user.email},
+                {"username": user.username}
+            ]
+        })
 
-    # Insert into DB
-    result = await db.users.insert_one(user_dict)
-    user_dict["id"] = str(result.inserted_id)  # CHANGED: Use "_id" for consistency with MongoDB (instead of "id")
-    return user_dict
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A user with this email or username already exists."
+            )
 
+        # Hash the password securely
+        hashed_password = hash_password(user.password)
+
+        # Prepare user document
+        user_dict = user.dict()
+        user_dict["hashed_password"] = hashed_password
+        user_dict.pop("password", None)
+
+        # Insert into the database
+        result = await db.users.insert_one(user_dict)
+        if not result.inserted_id:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create user. Please try again later."
+            )
+
+        # Prepare safe response
+        response_user = {
+            "id": str(result.inserted_id),
+            "username": user.username,
+            "email": user.email,
+        }
+
+        return {
+            "success": True,
+            "status": status.HTTP_201_CREATED,
+            "message": "Signup successful!",
+            "data": response_user
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Unexpected error during signup: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred: {str(e)}"
+        )
 # Login logic (unchanged)
 async def login(user: user_models.UserLogin):
     db_user = await db.users.find_one({"email": user.email})
     if not db_user or not verify_password(user.password, db_user["hashed_password"]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    
+
     # CHANGED: Use str(db_user["_id"]) as sub for token payload (not email) to match DB query in get_current_user
     token = create_access_token({"sub": str(db_user["_id"])})
     return {"access_token": token, "token_type": "bearer"}
